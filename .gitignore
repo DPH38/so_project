@@ -1,0 +1,31 @@
+# Arquivos e pastas gerados pelo Cargo (build, dependências, etc)
+target/
+
+# Arquivos de configuração do editor
+**/*.swp
+**/*.swo
+.idea/
+.vscode/
+
+# Arquivos de log e temporários
+*.log
+*.tmp
+
+# Arquivos de ambiente
+.env
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+*Zone.Identifier
+
+# Ignora arquivos de crash do Rust
+*.rs.bk
+
+# Outras pastas comuns
+node_modules/
+
+# Ignore the Zone.Identifier file that Windows creates for downloaded files
+
+
+*Zone.Identifier
