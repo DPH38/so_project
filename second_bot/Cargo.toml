@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "snapshot_agent",
+    "central_monitor"
+]
