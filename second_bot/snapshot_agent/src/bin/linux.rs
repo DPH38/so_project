@@ -7,9 +7,21 @@ use std::path::PathBuf;
 use dirs_next::home_dir;
 use std::thread::sleep;
 use chrono::{Utc, SecondsFormat};
+use uuid::Uuid;
+
+#[derive(Serialize)]
+struct ServiceStatus {
+    agent_id: String,
+    datetime: String,
+    timestamp: u64,
+    status: &'static str,
+    hostname: String,
+}
 
 #[derive(Serialize)]
 struct Snapshot {
+    agent_id: String,
+    hostname: String,
     timestamp: u64,
     datetime: String,
     total_memory: u64,
@@ -22,6 +34,8 @@ struct Snapshot {
 
 #[derive(Serialize)]
 struct LogError {
+    agent_id: String,
+    hostname: String,
     datetime: String,
     timestamp: u64,
     error: String,
@@ -50,7 +64,31 @@ fn append_to_log(json: &str) {
     writeln!(file, "{}", json).expect("Erro ao escrever log");
 }
 
-fn executar_snapshot() {
+fn get_hostname() -> String {
+    hostname::get()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+}
+
+fn log_service_status(status: &'static str, agent_id: &str) {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("Erro ao obter timestamp");
+    
+    let status_log = ServiceStatus {
+        agent_id: agent_id.to_string(),
+        datetime: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        timestamp: now.as_secs(),
+        status,
+        hostname: get_hostname(),
+    };
+
+    let json = serde_json::to_string(&status_log).expect("Erro ao serializar status");
+    append_to_log(&json);
+}
+
+fn executar_snapshot(agent_id: &str, hostname: &str) {
     let mut sys = System::new_all();
     sys.refresh_all();
 
@@ -74,6 +112,8 @@ fn executar_snapshot() {
             .collect(),
         Err(e) => {
             let log_error = LogError {
+                agent_id: agent_id.to_string(),
+                hostname: hostname.to_string(),
                 datetime: datetime.clone(),
                 timestamp,
                 error: format!("Erro ao ler pasta {:?}: {}", folder_path, e),
@@ -85,6 +125,8 @@ fn executar_snapshot() {
     };
 
     let snapshot = Snapshot {
+        agent_id: agent_id.to_string(),
+        hostname: hostname.to_string(),
         timestamp,
         datetime,
         total_memory,
@@ -102,6 +144,8 @@ fn executar_snapshot() {
 }
 
 fn main() {
+    let agent_id = Uuid::new_v4().to_string();
+    let hostname = get_hostname();
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() > 1 && args[1] == "--reset" {
@@ -118,8 +162,20 @@ fn main() {
         return;
     }
 
+    // Log de início do serviço
+    log_service_status("STARTED", &agent_id);
+
+    // Clone o agent_id para o handler de ctrl+c
+    let agent_id_handler = agent_id.clone();
+    
+    // Configurar handler para capturar sinais de término
+    ctrlc::set_handler(move || {
+        log_service_status("STOPPED", &agent_id_handler);
+        std::process::exit(0);
+    }).expect("Erro ao configurar handler de término");
+
     loop {
-        executar_snapshot();
+        executar_snapshot(&agent_id, &hostname);
         sleep(Duration::from_secs(30));
     }
 }
