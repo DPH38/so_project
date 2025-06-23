@@ -96,7 +96,7 @@ impl VMConnection {
 
         match &self.os {
             Some(OperatingSystem::Linux(_)) => {
-                // Copy the Linux agent
+                // LINUX (mantido igual)
                 let status = Command::new("scp")
                     .args([
                         "/home/drp/my/so/boots/second_bot/target/release/snapshot_agent_linux",
@@ -109,38 +109,35 @@ impl VMConnection {
                     return Err(anyhow::anyhow!("Failed to copy Linux agent"));
                 }
 
-                // Set up autostart using systemd user service
                 let service_content = format!(
                     "[Unit]\n\
-                    Description=Snapshot Agent Service\n\
-                    \n\
-                    [Service]\n\
-                    ExecStart=/home/%u/snapshot_agent\n\
-                    Restart=always\n\
-                    \n\
-                    [Install]\n\
-                    WantedBy=default.target"
+                Description=Snapshot Agent Service\n\
+                \n\
+                [Service]\n\
+                ExecStart=/home/%u/snapshot_agent\n\
+                Restart=always\n\
+                \n\
+                [Install]\n\
+                WantedBy=default.target"
                 );
 
-                // Create service file content
                 Command::new("ssh")
                     .args([
                         &self.ssh_config,
                         &format!(
                             "mkdir -p ~/.config/systemd/user && \
-                            echo '{}' > ~/.config/systemd/user/snapshot-agent.service && \
-                            chmod +x ~/snapshot_agent && \
-                            systemctl --user enable snapshot-agent.service && \
-                            systemctl --user start snapshot-agent.service && \
-                            sleep 2 && \
-                            systemctl --user status snapshot-agent.service",
+                        echo '{}' > ~/.config/systemd/user/snapshot-agent.service && \
+                        chmod +x ~/snapshot_agent && \
+                        systemctl --user enable snapshot-agent.service && \
+                        systemctl --user start snapshot-agent.service && \
+                        sleep 2 && \
+                        systemctl --user status snapshot-agent.service",
                             service_content
                         ),
                     ])
                     .status()
                     .context("Failed to set up Linux autostart")?;
 
-                // Executa o agente imediatamente em background
                 Command::new("ssh")
                     .args([
                         &self.ssh_config,
@@ -154,16 +151,17 @@ impl VMConnection {
                     self.name.green()
                 );
             }
+
             Some(OperatingSystem::Windows(_)) => {
-                // Copia para uma pasta pública acessível
+                // Copia o executável para a VM
                 let temp_dest = format!("{}:C:/Users/Public/snapshot_agent.exe", self.ssh_config);
                 let status = Command::new("scp")
-                    .args([
-                        "/home/drp/my/so/boots/second_bot/target/x86_64-pc-windows-gnu/release/snapshot_agent_windows.exe",
-                        &temp_dest
-                    ])
-                    .status()
-                    .context("Failed to copy Windows agent to public location")?;
+        .args([
+            "/home/drp/my/so/boots/second_bot/target/x86_64-pc-windows-gnu/release/snapshot_agent_windows.exe",
+            &temp_dest,
+        ])
+        .status()
+        .context("Failed to copy Windows agent to public location")?;
 
                 if !status.success() {
                     return Err(anyhow::anyhow!(
@@ -171,29 +169,57 @@ impl VMConnection {
                     ));
                 }
 
-                // Executa o agente imediatamente em background usando cmd /c diretamente
+                // Garante que o diretório de log existe
                 Command::new("ssh")
+        .args([
+            &self.ssh_config,
+            "powershell -Command \"New-Item -ItemType Directory -Path C:\\Users\\so\\.snapshot_agent -Force | Out-Null\"",
+        ])
+        .status()
+        .context("Failed to create log directory in Windows VM")?;
+
+                // Cria a tarefa agendada com schtasks
+                Command::new("ssh")
+        .args([
+            &self.ssh_config,
+            "schtasks /Create /TN SnapshotAgent /TR \"C:\\Users\\Public\\snapshot_agent.exe\" /SC ONCE /ST 00:00 /RL HIGHEST /F"
+        ])
+        .status()
+        .context("Failed to create scheduled task for agent")?;
+
+                // Executa a tarefa
+                Command::new("ssh")
+                    .args([&self.ssh_config, "schtasks /Run /TN SnapshotAgent"])
+                    .status()
+                    .context("Failed to run scheduled task for agent")?;
+
+                // Aguarda 2 segundos para garantir startup
+                std::thread::sleep(std::time::Duration::from_secs(2));
+
+                // Verifica se o processo está ativo
+                let check = Command::new("ssh")
                     .args([
                         &self.ssh_config,
-                        "cmd /c C:\\Users\\Public\\snapshot_agent.exe",
+                        "wmic process where \"Name='snapshot_agent.exe'\" get ProcessId",
                     ])
-                    .status()
-                    .context("Failed to start Windows agent in background")?;
+                    .output()
+                    .context("Failed to check agent process via WMIC")?;
 
-                // Configura autostart global (HKLM) - requer permissão de administrador
-                Command::new("ssh")
-    .args([
-        &self.ssh_config,
-        "reg add \"HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\" /v SnapshotAgent /t REG_SZ /d \"C:\\Users\\Public\\snapshot_agent.exe\" /f"
-    ])
-    .status()
-    .context("Failed to set up Windows autostart in HKLM")?;
+                if String::from_utf8_lossy(&check.stdout).contains("ProcessId") {
+                    println!("🟢 Agente Windows rodando na VM {}", self.name.green());
+                } else {
+                    println!(
+                        "🟡 Agente Windows NÃO detectado como processo ativo na VM {}",
+                        self.name.yellow()
+                    );
+                }
 
                 println!(
-                    "✅ Successfully deployed and started Windows agent to {} (C:/Users/Public)",
+                    "✅ Successfully deployed and started Windows agent to {} (via Scheduled Task)",
                     self.name.green()
                 );
             }
+
             _ => {
                 println!("❌ Cannot deploy agent to {} - Unknown OS", self.name.red());
                 return Err(anyhow::anyhow!("Unknown OS type"));

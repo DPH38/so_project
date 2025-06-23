@@ -1,8 +1,8 @@
-use dialoguer::{Select, theme::ColorfulTheme};
-use colored::*;
-use std::process::Command;
-use anyhow::{Result, Context};
 use crate::VMConnection;
+use anyhow::{Context, Result};
+use colored::*;
+use dialoguer::{theme::ColorfulTheme, Select};
+use std::process::Command;
 
 pub struct Menu {
     vms: Vec<VMConnection>,
@@ -26,47 +26,58 @@ impl Menu {
     pub fn run(&mut self) -> Result<()> {
         loop {
             match self.show_main_menu()? {
-                0 => { // Testar conexão
+                0 => {
+                    // Testar conexão
                     let vm_idx = self.select_vm("Selecione a VM para testar conexão")?;
                     if let Err(e) = self.test_vm_connection(vm_idx) {
                         println!("Erro: {}", e);
                     }
                 }
-                1 => { // Instalar/Atualizar
-                    let vm_idx = self.select_vm("Selecione a VM para instalar/atualizar o agente")?;
+                1 => {
+                    // Instalar/Atualizar
+                    let vm_idx =
+                        self.select_vm("Selecione a VM para instalar/atualizar o agente")?;
                     let vm = &self.vms[vm_idx];
-                    println!("\n🚀 Instalando/Atualizando agente em {}...", vm.name.cyan());
+                    println!(
+                        "\n🚀 Instalando/Atualizando agente em {}...",
+                        vm.name.cyan()
+                    );
                     if let Err(e) = vm.deploy_snapshot_agent() {
                         println!("❌ Erro ao instalar/atualizar agente: {}", e);
                     } else {
                         println!("✅ Agente instalado/atualizado com sucesso!");
                     }
                 }
-                2 => { // Listar status
+                2 => {
+                    // Listar status
                     let vm_idx = self.select_vm("Selecione a VM para verificar o status")?;
                     if let Err(e) = self.show_agent_status(vm_idx) {
                         println!("Erro: {}", e);
                     }
                 }
-                3 => { // Ver logs
+                3 => {
+                    // Ver logs
                     let vm_idx = self.select_vm("Selecione a VM para ver os logs")?;
                     if let Err(e) = self.show_agent_logs(vm_idx) {
                         println!("Erro: {}", e);
                     }
                 }
-                4 => { // Reiniciar
+                4 => {
+                    // Reiniciar
                     let vm_idx = self.select_vm("Selecione a VM para reiniciar o agente")?;
                     if let Err(e) = self.restart_agent(vm_idx) {
                         println!("Erro: {}", e);
                     }
                 }
-                5 => { // Parar
+                5 => {
+                    // Parar
                     let vm_idx = self.select_vm("Selecione a VM para parar o agente")?;
                     if let Err(e) = self.stop_agent(vm_idx) {
                         println!("Erro: {}", e);
                     }
                 }
-                6 => { // Remover
+                6 => {
+                    // Remover
                     let vm_idx = self.select_vm("Selecione a VM para remover o agente")?;
                     if let Err(e) = self.remove_agent(vm_idx) {
                         println!("Erro: {}", e);
@@ -75,7 +86,7 @@ impl Menu {
                 7 => break, // Sair
                 _ => unreachable!(),
             }
-            
+
             println!("\nPressione Enter para continuar...");
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
@@ -106,9 +117,7 @@ impl Menu {
     }
 
     fn select_vm(&self, prompt: &str) -> Result<usize> {
-        let vm_names: Vec<_> = self.vms.iter()
-            .map(|vm| vm.name.as_str())
-            .collect();
+        let vm_names: Vec<_> = self.vms.iter().map(|vm| vm.name.as_str()).collect();
 
         let selection = Select::with_theme(&ColorfulTheme::default())
             .with_prompt(prompt)
@@ -121,9 +130,9 @@ impl Menu {
 
     fn show_agent_status(&self, vm_idx: usize) -> Result<()> {
         let vm = &self.vms[vm_idx];
-        
+
         println!("\n🔍 Verificando status do agente em {}...", vm.name.cyan());
-        
+
         match &vm.os {
             Some(crate::OperatingSystem::Linux(_)) => {
                 // Usa systemctl para status real do serviço e PID
@@ -161,10 +170,7 @@ impl Menu {
             }
             Some(crate::OperatingSystem::Windows(_)) => {
                 let output = Command::new("ssh")
-                    .args([
-                        &vm.ssh_config,
-                        "tasklist | findstr snapshot_agent"
-                    ])
+                    .args([&vm.ssh_config, "tasklist | findstr snapshot_agent"])
                     .output()
                     .context("Falha ao verificar status do processo")?;
 
@@ -185,13 +191,11 @@ impl Menu {
 
     fn show_agent_logs(&self, vm_idx: usize) -> Result<()> {
         let vm = &self.vms[vm_idx];
-        
+
         println!("\n📖 Obtendo logs do agente em {}...", vm.name.cyan());
-        
+
         let log_command = match &vm.os {
-            Some(crate::OperatingSystem::Linux(_)) => {
-                "tail -n 50 ~/.snapshot_agent/snapshot.log"
-            }
+            Some(crate::OperatingSystem::Linux(_)) => "tail -n 50 ~/.snapshot_agent/snapshot.log",
             Some(crate::OperatingSystem::Windows(_)) => {
                 "type \"%USERPROFILE%\\.snapshot_agent\\snapshot.log\""
             }
@@ -213,15 +217,15 @@ impl Menu {
 
     fn restart_agent(&self, vm_idx: usize) -> Result<()> {
         let vm = &self.vms[vm_idx];
-        
+
         println!("\n🔄 Reiniciando agente em {}...", vm.name.cyan());
-        
+
         match &vm.os {
             Some(crate::OperatingSystem::Linux(_)) => {
                 Command::new("ssh")
                     .args([
                         &vm.ssh_config,
-                        "systemctl --user restart snapshot-agent.service"
+                        "systemctl --user restart snapshot-agent.service",
                     ])
                     .status()
                     .context("Falha ao reiniciar serviço")?;
@@ -232,7 +236,7 @@ impl Menu {
                     .args([
                         &vm.ssh_config,
                         "taskkill /F /IM snapshot_agent.exe && \
-                         start \"\" \"C:\\Program Files\\SnapshotAgent\\snapshot_agent.exe\""
+                         start \"\" \"C:\\Program Files\\SnapshotAgent\\snapshot_agent.exe\"",
                     ])
                     .status()
                     .context("Falha ao reiniciar processo")?;
@@ -246,29 +250,30 @@ impl Menu {
 
     fn stop_agent(&self, vm_idx: usize) -> Result<()> {
         let vm = &self.vms[vm_idx];
-        
+
         println!("\n🛑 Parando agente em {}...", vm.name.cyan());
-        
+
         match &vm.os {
             Some(crate::OperatingSystem::Linux(_)) => {
                 Command::new("ssh")
                     .args([
                         &vm.ssh_config,
-                        "systemctl --user stop snapshot-agent.service"
+                        "systemctl --user stop snapshot-agent.service",
                     ])
                     .status()
                     .context("Falha ao parar serviço")?;
                 println!("✅ Agente parado com sucesso");
             }
             Some(crate::OperatingSystem::Windows(_)) => {
+                // Para o processo e desabilita o agendamento
                 Command::new("ssh")
                     .args([
                         &vm.ssh_config,
-                        "taskkill /F /IM snapshot_agent.exe"
+                        "schtasks /End /TN SnapshotAgent & taskkill /F /IM snapshot_agent.exe",
                     ])
                     .status()
-                    .context("Falha ao parar processo")?;
-                println!("✅ Agente parado com sucesso");
+                    .context("Falha ao parar processo e agendamento")?;
+                println!("✅ Agente e agendamento parados com sucesso");
             }
             _ => println!("❌ Sistema operacional não suportado"),
         }
@@ -278,9 +283,9 @@ impl Menu {
 
     fn remove_agent(&self, vm_idx: usize) -> Result<()> {
         let vm = &self.vms[vm_idx];
-        
+
         println!("\n🗑️ Removendo agente de {}...", vm.name.cyan());
-        
+
         match &vm.os {
             Some(crate::OperatingSystem::Linux(_)) => {
                 Command::new("ssh")
@@ -290,24 +295,22 @@ impl Menu {
                          systemctl --user disable snapshot-agent.service && \
                          rm -f ~/.config/systemd/user/snapshot-agent.service && \
                          sudo rm -rf /opt/snapshot_agent && \
-                         rm -rf ~/.snapshot_agent"
+                         rm -rf ~/.snapshot_agent",
                     ])
                     .status()
                     .context("Falha ao remover agente Linux")?;
                 println!("✅ Agente removido com sucesso");
             }
             Some(crate::OperatingSystem::Windows(_)) => {
+                // Para o processo, deleta o agendamento e remove arquivos
                 Command::new("ssh")
                     .args([
                         &vm.ssh_config,
-                        "taskkill /F /IM snapshot_agent.exe 2>NUL & \
-                         reg delete HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run /v SnapshotAgent /f & \
-                         rmdir /S /Q \"C:\\Program Files\\SnapshotAgent\" & \
-                         rmdir /S /Q \"%USERPROFILE%\\.snapshot_agent\""
+                        "schtasks /End /TN SnapshotAgent & schtasks /Delete /TN SnapshotAgent /F & taskkill /F /IM snapshot_agent.exe 2>NUL & del C:\\Users\\Public\\snapshot_agent.exe & rmdir /S /Q \"C:\\Program Files\\SnapshotAgent\" & rmdir /S /Q \"%USERPROFILE%\\.snapshot_agent\""
                     ])
                     .status()
                     .context("Falha ao remover agente Windows")?;
-                println!("✅ Agente removido com sucesso");
+                println!("✅ Agente e agendamento removidos com sucesso");
             }
             _ => println!("❌ Sistema operacional não suportado"),
         }
