@@ -48,16 +48,19 @@ snapshot_agent_windows.exe
 
 ### Para Linux (nativo)
 ```bash
-cargo build --release
+cargo build --release --bin snapshot_agent_linux
 ```
+O executável será gerado em `target/release/snapshot_agent_linux`.
 
 ### Para Windows (em máquina Linux)
 É necessário instalar o [cross](https://github.com/cross-rs/cross):
 ```bash
 cargo install cross
-cross build --release --target x86_64-pc-windows-gnu
+cross build --release --target x86_64-pc-windows-gnu --bin snapshot_agent_windows
 ```
 O executável será gerado em `target/x86_64-pc-windows-gnu/release/snapshot_agent_windows.exe`.
+
+> **Nota:** O agente Windows é compilado como binário GUI (não abre terminal ao ser iniciado por agendador ou duplo clique).
 
 ## Requisitos
 - Rust 1.60 ou superior
@@ -67,4 +70,5 @@ O executável será gerado em `target/x86_64-pc-windows-gnu/release/snapshot_age
 ## Observações
 - Certifique-se de que o `central_monitor` esteja em execução se for utilizar integração.
 - Consulte o código-fonte dos arquivos `linux.rs` e `windows.rs` para detalhes das informações coletadas em cada SO.
-- Os logs e mensagens de erro são impressos no terminal para facilitar o diagnóstico.
+- Os logs e mensagens de erro são gravados em arquivo na pasta do usuário (`~/.snapshot_agent/snapshot.log`).
+- No Windows, prints no terminal não aparecerão se o binário for executado como GUI.

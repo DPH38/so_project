@@ -1,24 +1,26 @@
-use sysinfo::{System, SystemExt, CpuExt, DiskExt};
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
+use chrono::{SecondsFormat, Utc};
+use dirs_next::home_dir;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::time::{SystemTime, Duration};
 use std::path::PathBuf;
-use dirs_next::home_dir;
 use std::thread::sleep;
-use chrono::{Utc, SecondsFormat};
+use std::time::{Duration, SystemTime};
+use sysinfo::{CpuExt, DiskExt, System, SystemExt};
 
 /// Estrutura que representa um snapshot do sistema
 #[derive(Serialize)]
 struct Snapshot {
-    timestamp: u64,           // Timestamp UNIX do momento do snapshot
-    datetime: String,         // Data/hora legível (UTC, formato ISO8601)
-    total_memory: u64,        // Memória total do sistema (em KB)
-    used_memory: u64,         // Memória usada (em KB)
-    cpu_usage_percent: f32,   // Uso global da CPU em porcentagem
-    total_disk: u64,          // Espaço total em disco (em bytes)
-    used_disk: u64,           // Espaço usado em disco (em bytes)
-    folder_files: Vec<String>,// Lista de arquivos encontrados na pasta monitorada
+    timestamp: u64,            // Timestamp UNIX do momento do snapshot
+    datetime: String,          // Data/hora legível (UTC, formato ISO8601)
+    total_memory: u64,         // Memória total do sistema (em KB)
+    used_memory: u64,          // Memória usada (em KB)
+    cpu_usage_percent: f32,    // Uso global da CPU em porcentagem
+    total_disk: u64,           // Espaço total em disco (em bytes)
+    used_disk: u64,            // Espaço usado em disco (em bytes)
+    folder_files: Vec<String>, // Lista de arquivos encontrados na pasta monitorada
 }
 
 /// Estrutura para logar erros
@@ -75,13 +77,21 @@ fn executar_snapshot() {
 
     // Coleta informações de disco (usando disks() com feature disk)
     let total_disk: u64 = sys.disks().iter().map(|d| d.total_space()).sum();
-    let used_disk: u64 = sys.disks().iter().map(|d| d.total_space() - d.available_space()).sum();
+    let used_disk: u64 = sys
+        .disks()
+        .iter()
+        .map(|d| d.total_space() - d.available_space())
+        .sum();
 
     // Lista arquivos da pasta monitorada (usuarios)
     let folder_path = get_folder_to_monitor();
     let folder_files = match fs::read_dir(&folder_path) {
         Ok(entries) => entries
-            .filter_map(|entry| entry.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter_map(|entry| {
+                entry
+                    .ok()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+            })
             .collect(),
         Err(e) => {
             // Loga o erro de leitura da pasta
