@@ -5,8 +5,8 @@ use std::process::Command;
 mod cli;
 
 enum OperatingSystem {
-    Linux(String),    // String contains the detailed version
-    Windows(String),  // String contains the detailed version
+    Linux(String),   // String contains the detailed version
+    Windows(String), // String contains the detailed version
     Unknown,
 }
 
@@ -43,7 +43,11 @@ impl VMConnection {
                 Some(OperatingSystem::Unknown) => "Unknown OS".to_string(),
                 None => "OS not detected".to_string(),
             };
-            println!("✅ Successfully connected to {} - Running {}", self.name.green(), os_description.cyan());
+            println!(
+                "✅ Successfully connected to {} - Running {}",
+                self.name.green(),
+                os_description.cyan()
+            );
         } else {
             println!("❌ Failed to connect to {}", self.name.red());
             if let Ok(stderr) = String::from_utf8(output.stderr) {
@@ -89,14 +93,14 @@ impl VMConnection {
 
     fn deploy_snapshot_agent(&self) -> Result<()> {
         println!("🚀 Deploying snapshot agent to {}...", self.name.cyan());
-        
+
         match &self.os {
             Some(OperatingSystem::Linux(_)) => {
                 // Copy the Linux agent
                 let status = Command::new("scp")
                     .args([
                         "/home/drp/my/so/boots/second_bot/target/release/snapshot_agent_linux",
-                        &format!("{}:~/snapshot_agent", self.ssh_config)
+                        &format!("{}:~/snapshot_agent", self.ssh_config),
                     ])
                     .status()
                     .context("Failed to copy Linux agent")?;
@@ -131,7 +135,7 @@ impl VMConnection {
                             sleep 2 && \
                             systemctl --user status snapshot-agent.service",
                             service_content
-                        )
+                        ),
                     ])
                     .status()
                     .context("Failed to set up Linux autostart")?;
@@ -140,12 +144,15 @@ impl VMConnection {
                 Command::new("ssh")
                     .args([
                         &self.ssh_config,
-                        "nohup ~/snapshot_agent > ~/.snapshot_agent/snapshot.log 2>&1 &"
+                        "nohup ~/snapshot_agent > ~/.snapshot_agent/snapshot.log 2>&1 &",
                     ])
                     .status()
                     .context("Failed to start Linux agent in background")?;
 
-                println!("✅ Successfully deployed and started Linux agent to {}", self.name.green());
+                println!(
+                    "✅ Successfully deployed and started Linux agent to {}",
+                    self.name.green()
+                );
             }
             Some(OperatingSystem::Windows(_)) => {
                 // Copia para uma pasta pública acessível
@@ -159,28 +166,33 @@ impl VMConnection {
                     .context("Failed to copy Windows agent to public location")?;
 
                 if !status.success() {
-                    return Err(anyhow::anyhow!("Failed to copy Windows agent to public location"));
+                    return Err(anyhow::anyhow!(
+                        "Failed to copy Windows agent to public location"
+                    ));
                 }
 
-                // Executa o agente imediatamente em background a partir da pasta pública usando cmd /c start
+                // Executa o agente imediatamente em background usando cmd /c diretamente
                 Command::new("ssh")
                     .args([
                         &self.ssh_config,
-                        "cmd /c start \"\" C:\\Users\\Public\\snapshot_agent.exe"
+                        "cmd /c C:\\Users\\Public\\snapshot_agent.exe",
                     ])
                     .status()
                     .context("Failed to start Windows agent in background")?;
 
-                // Opcional: configurar autostart para rodar da pasta pública
+                // Configura autostart global (HKLM) - requer permissão de administrador
                 Command::new("ssh")
-                    .args([
-                        &self.ssh_config,
-                        "REG ADD HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run /v SnapshotAgent /t REG_SZ /d C:\\Users\\Public\\snapshot_agent.exe /f"
-                    ])
-                    .status()
-                    .context("Failed to set up Windows autostart")?;
+    .args([
+        &self.ssh_config,
+        "reg add \"HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\" /v SnapshotAgent /t REG_SZ /d \"C:\\Users\\Public\\snapshot_agent.exe\" /f"
+    ])
+    .status()
+    .context("Failed to set up Windows autostart in HKLM")?;
 
-                println!("✅ Successfully deployed and started Windows agent to {} (C:/Users/Public)", self.name.green());
+                println!(
+                    "✅ Successfully deployed and started Windows agent to {} (C:/Users/Public)",
+                    self.name.green()
+                );
             }
             _ => {
                 println!("❌ Cannot deploy agent to {} - Unknown OS", self.name.red());
