@@ -13,8 +13,80 @@ impl Menu {
         Self { vms }
     }
 
+    fn test_vm_connection(&mut self, vm_idx: usize) -> Result<()> {
+        let vm = &mut self.vms[vm_idx];
+        match vm.test_connection() {
+            Ok(true) => println!("✅ Conectado com sucesso a {}", vm.name.green()),
+            Ok(false) => println!("❌ Falha ao conectar com {}", vm.name.red()),
+            Err(e) => println!("❌ Erro ao testar {}: {}", vm.name.yellow(), e),
+        }
+        Ok(())
+    }
+
+    pub fn run(&mut self) -> Result<()> {
+        loop {
+            match self.show_main_menu()? {
+                0 => { // Testar conexão
+                    let vm_idx = self.select_vm("Selecione a VM para testar conexão")?;
+                    if let Err(e) = self.test_vm_connection(vm_idx) {
+                        println!("Erro: {}", e);
+                    }
+                }
+                1 => { // Instalar/Atualizar
+                    let vm_idx = self.select_vm("Selecione a VM para instalar/atualizar o agente")?;
+                    let vm = &self.vms[vm_idx];
+                    println!("\n🚀 Instalando/Atualizando agente em {}...", vm.name.cyan());
+                    if let Err(e) = vm.deploy_snapshot_agent() {
+                        println!("❌ Erro ao instalar/atualizar agente: {}", e);
+                    } else {
+                        println!("✅ Agente instalado/atualizado com sucesso!");
+                    }
+                }
+                2 => { // Listar status
+                    let vm_idx = self.select_vm("Selecione a VM para verificar o status")?;
+                    if let Err(e) = self.show_agent_status(vm_idx) {
+                        println!("Erro: {}", e);
+                    }
+                }
+                3 => { // Ver logs
+                    let vm_idx = self.select_vm("Selecione a VM para ver os logs")?;
+                    if let Err(e) = self.show_agent_logs(vm_idx) {
+                        println!("Erro: {}", e);
+                    }
+                }
+                4 => { // Reiniciar
+                    let vm_idx = self.select_vm("Selecione a VM para reiniciar o agente")?;
+                    if let Err(e) = self.restart_agent(vm_idx) {
+                        println!("Erro: {}", e);
+                    }
+                }
+                5 => { // Parar
+                    let vm_idx = self.select_vm("Selecione a VM para parar o agente")?;
+                    if let Err(e) = self.stop_agent(vm_idx) {
+                        println!("Erro: {}", e);
+                    }
+                }
+                6 => { // Remover
+                    let vm_idx = self.select_vm("Selecione a VM para remover o agente")?;
+                    if let Err(e) = self.remove_agent(vm_idx) {
+                        println!("Erro: {}", e);
+                    }
+                }
+                7 => break, // Sair
+                _ => unreachable!(),
+            }
+            
+            println!("\nPressione Enter para continuar...");
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+        }
+
+        Ok(())
+    }
+
     fn show_main_menu(&self) -> Result<usize> {
         let options = vec![
+            "Testar conexão com VM",
             "Instalar/Atualizar agente em uma VM",
             "Listar status dos agentes",
             "Ver logs de um agente",
@@ -54,18 +126,37 @@ impl Menu {
         
         match &vm.os {
             Some(crate::OperatingSystem::Linux(_)) => {
-                // Verifica se o processo está rodando e mostra detalhes
+                // Usa systemctl para status real do serviço e PID
                 let output = Command::new("ssh")
                     .args([
                         &vm.ssh_config,
-                        "pgrep -fl snapshot_agent || echo 'snapshot_agent não está rodando'"
+                        "systemctl --user is-active snapshot-agent.service && systemctl --user show -p MainPID snapshot-agent.service && systemctl --user status snapshot-agent.service | head -20"
                     ])
                     .output()
-                    .context("Falha ao verificar status do processo")?;
+                    .context("Falha ao verificar status do serviço systemd")?;
 
                 if let Ok(stdout) = String::from_utf8(output.stdout) {
-                    println!("\nStatus do processo:");
-                    println!("{}", stdout);
+                    if stdout.contains("active") {
+                        println!("\n✅ Serviço snapshot-agent.service está ativo");
+                        // Mostra PID principal
+                        for line in stdout.lines() {
+                            if line.starts_with("MainPID=") {
+                                let pid = line.trim_start_matches("MainPID=");
+                                if pid != "0" {
+                                    println!("PID principal: {}", pid.green());
+                                } else {
+                                    println!("PID principal: não encontrado");
+                                }
+                            }
+                        }
+                        // Mostra resumo do status
+                        println!("\nResumo do status:");
+                        for line in stdout.lines().take(20) {
+                            println!("{}", line);
+                        }
+                    } else {
+                        println!("\n❌ Serviço snapshot-agent.service não está ativo");
+                    }
                 }
             }
             Some(crate::OperatingSystem::Windows(_)) => {
@@ -223,61 +314,9 @@ impl Menu {
 
         Ok(())
     }
-
-    pub fn run(&self) -> Result<()> {
-        loop {
-            match self.show_main_menu()? {
-                0 => { // Listar status
-                    let vm_idx = self.select_vm("Selecione a VM para verificar o status")?;
-                    if let Err(e) = self.show_agent_status(vm_idx) {
-                        println!("Erro: {}", e);
-                    }
-                }
-                1 => { // Ver logs
-                    let vm_idx = self.select_vm("Selecione a VM para ver os logs")?;
-                    if let Err(e) = self.show_agent_logs(vm_idx) {
-                        println!("Erro: {}", e);
-                    }
-                }
-                2 => { // Reiniciar
-                    let vm_idx = self.select_vm("Selecione a VM para reiniciar o agente")?;
-                    if let Err(e) = self.restart_agent(vm_idx) {
-                        println!("Erro: {}", e);
-                    }
-                }
-                3 => { // Parar
-                    let vm_idx = self.select_vm("Selecione a VM para parar o agente")?;
-                    if let Err(e) = self.stop_agent(vm_idx) {
-                        println!("Erro: {}", e);
-                    }
-                }
-                4 => { // Atualizar
-                    let vm_idx = self.select_vm("Selecione a VM para atualizar o agente")?;
-                    let vm = &self.vms[vm_idx];
-                    if let Err(e) = vm.deploy_snapshot_agent() {
-                        println!("Erro ao atualizar agente: {}", e);
-                    }
-                }
-                5 => { // Remover
-                    let vm_idx = self.select_vm("Selecione a VM para remover o agente")?;
-                    if let Err(e) = self.remove_agent(vm_idx) {
-                        println!("Erro: {}", e);
-                    }
-                }
-                6 => break, // Sair
-                _ => unreachable!(),
-            }
-            
-            println!("\nPressione Enter para continuar...");
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-        }
-
-        Ok(())
-    }
 }
 
 pub fn run_menu(vms: Vec<VMConnection>) -> Result<()> {
-    let menu = Menu::new(vms);
+    let mut menu = Menu::new(vms);
     menu.run()
 }

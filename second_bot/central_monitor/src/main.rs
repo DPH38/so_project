@@ -136,42 +136,51 @@ impl VMConnection {
                     .status()
                     .context("Failed to set up Linux autostart")?;
 
-                println!("✅ Successfully deployed Linux agent to {}", self.name.green());
-            }
-            Some(OperatingSystem::Windows(_)) => {
-                // Create the program directory first
+                // Executa o agente imediatamente em background
                 Command::new("ssh")
                     .args([
                         &self.ssh_config,
-                        "mkdir \"C:\\Program Files\\SnapshotAgent\""
+                        "nohup ~/snapshot_agent > ~/.snapshot_agent/snapshot.log 2>&1 &"
                     ])
                     .status()
-                    .context("Failed to create Windows program directory")?;
+                    .context("Failed to start Linux agent in background")?;
 
-                // Copy the Windows agent
+                println!("✅ Successfully deployed and started Linux agent to {}", self.name.green());
+            }
+            Some(OperatingSystem::Windows(_)) => {
+                // Copia para uma pasta pública acessível
+                let temp_dest = format!("{}:C:/Users/Public/snapshot_agent.exe", self.ssh_config);
                 let status = Command::new("scp")
                     .args([
                         "/home/drp/my/so/boots/second_bot/target/x86_64-pc-windows-gnu/release/snapshot_agent_windows.exe",
-                        &format!("{}:'C:/Program Files/SnapshotAgent/snapshot_agent.exe'", self.ssh_config)
+                        &temp_dest
                     ])
                     .status()
-                    .context("Failed to copy Windows agent")?;
+                    .context("Failed to copy Windows agent to public location")?;
 
                 if !status.success() {
-                    return Err(anyhow::anyhow!("Failed to copy Windows agent"));
+                    return Err(anyhow::anyhow!("Failed to copy Windows agent to public location"));
                 }
 
-                // Set up autostart using Windows Registry
+                // Executa o agente imediatamente em background a partir da pasta pública usando cmd /c start
                 Command::new("ssh")
                     .args([
                         &self.ssh_config,
-                        "REG ADD HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run \
-                         /v SnapshotAgent /t REG_SZ /d \"C:\\Program Files\\SnapshotAgent\\snapshot_agent.exe\" /f"
+                        "cmd /c start \"\" C:\\Users\\Public\\snapshot_agent.exe"
+                    ])
+                    .status()
+                    .context("Failed to start Windows agent in background")?;
+
+                // Opcional: configurar autostart para rodar da pasta pública
+                Command::new("ssh")
+                    .args([
+                        &self.ssh_config,
+                        "REG ADD HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run /v SnapshotAgent /t REG_SZ /d C:\\Users\\Public\\snapshot_agent.exe /f"
                     ])
                     .status()
                     .context("Failed to set up Windows autostart")?;
 
-                println!("✅ Successfully deployed Windows agent to {}", self.name.green());
+                println!("✅ Successfully deployed and started Windows agent to {} (C:/Users/Public)", self.name.green());
             }
             _ => {
                 println!("❌ Cannot deploy agent to {} - Unknown OS", self.name.red());
@@ -194,33 +203,8 @@ async fn main() -> Result<()> {
         VMConnection::new("computer 3", "so-lin2"),
     ];
 
-    println!("\n📝 Testando conexão com todas as VMs...\n");
-
-    // Testar conexões primeiro
-    let mut connected_vms = Vec::new();
-    for mut vm in vms {
-        match vm.test_connection() {
-            Ok(true) => {
-                println!("✅ Conectado com sucesso a {}", vm.name.green());
-                connected_vms.push(vm);
-            },
-            Ok(false) => println!("❌ Falha ao conectar com {}", vm.name.red()),
-            Err(e) => println!("❌ Erro ao testar {}: {}", vm.name.yellow(), e),
-        }
-        println!();
-    }
-
-    if connected_vms.is_empty() {
-        println!("❌ Nenhuma VM conectada!");
-        return Ok(());
-    }
-
-    println!("{}", "==============================".bright_blue());
-    println!("✅ {} VMs conectadas", connected_vms.len());
-    println!("{}", "==============================".bright_blue());
-
     // Iniciar menu interativo
-    cli::run_menu(connected_vms)?;
+    cli::run_menu(vms)?;
 
     Ok(())
 }
