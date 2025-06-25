@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use colored::*;
+
 use std::process::Command;
+use std::str;
 
 mod cli;
 
-enum OperatingSystem {
+pub enum OperatingSystem {
     Linux(String),   // String contains the detailed version
     Windows(String), // String contains the detailed version
     Unknown,
@@ -13,20 +15,56 @@ enum OperatingSystem {
 struct VMConnection {
     name: String,
     ssh_config: String,
+    ip: String,               // This will be replaced with the hostname eventually
+    hostname: Option<String>, // Real hostname from SSH config
     os: Option<OperatingSystem>,
 }
 
 impl VMConnection {
-    fn new(name: &str, ssh_config: &str) -> Self {
+    fn new(name: &str, ssh_config: &str, ip: &str) -> Self {
         Self {
             name: name.to_string(),
             ssh_config: ssh_config.to_string(),
+            ip: ip.to_string(),
+            hostname: None,
             os: None,
         }
     }
 
+    // Function to read HostName from the SSH config file
+    fn get_ssh_hostname(&mut self) -> Result<String> {
+        // Use ssh -G to print the effective configuration for the host
+        let output = Command::new("ssh")
+            .args(["-G", &self.ssh_config])
+            .output()
+            .context(format!("Failed to read SSH config for {}", self.name))?;
+
+        let config = String::from_utf8_lossy(&output.stdout);
+
+        // Look for the line that starts with "hostname "
+        for line in config.lines() {
+            if line.starts_with("hostname ") {
+                let hostname = line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or(&self.ip)
+                    .to_string();
+                self.hostname = Some(hostname.clone());
+                return Ok(hostname);
+            }
+        }
+
+        // If not found, return the current IP as a fallback
+        Ok(self.ip.clone())
+    }
+
     fn test_connection(&mut self) -> Result<bool> {
         println!("🔄 Testing connection to {}...", self.name.cyan());
+
+        // Get real hostname before testing
+        if self.hostname.is_none() {
+            let _ = self.get_ssh_hostname();
+        }
 
         // Use ssh -T to test the connection
         let output = Command::new("ssh")
@@ -96,10 +134,10 @@ impl VMConnection {
 
         match &self.os {
             Some(OperatingSystem::Linux(_)) => {
-                // LINUX (mantido igual)
+                // LINUX (kept the same)
                 let status = Command::new("scp")
                     .args([
-                        "/home/drp/my/so/boots/second_bot/target/release/snapshot_agent_linux",
+                        "/home/drp/my/so/bots/second_bot/target/release/snapshot_agent_linux",
                         &format!("{}:~/snapshot_agent", self.ssh_config),
                     ])
                     .status()
@@ -114,37 +152,35 @@ impl VMConnection {
                 Description=Snapshot Agent Service\n\
                 \n\
                 [Service]\n\
+                Type=simple\n\
                 ExecStart=/home/%u/snapshot_agent\n\
+                ExecStop=/bin/kill -TERM $MAINPID\n\
+                KillMode=process\n\
                 Restart=always\n\
+                WorkingDirectory=/home/%u\n\
                 \n\
                 [Install]\n\
                 WantedBy=default.target"
                 );
 
+                // Configurar serviço e iniciar
                 Command::new("ssh")
                     .args([
                         &self.ssh_config,
                         &format!(
-                            "mkdir -p ~/.config/systemd/user && \
-                        echo '{}' > ~/.config/systemd/user/snapshot-agent.service && \
-                        chmod +x ~/snapshot_agent && \
-                        systemctl --user enable snapshot-agent.service && \
-                        systemctl --user start snapshot-agent.service && \
-                        sleep 2 && \
-                        systemctl --user status snapshot-agent.service",
+                            "mkdir -p ~/.config/systemd/user ~/.snapshot_agent && \
+                            echo '{}' > ~/.config/systemd/user/snapshot-agent.service && \
+                            chmod +x ~/snapshot_agent && \
+                            systemctl --user daemon-reload && \
+                            systemctl --user enable snapshot-agent.service && \
+                            systemctl --user start snapshot-agent.service && \
+                            sleep 2 && \
+                            systemctl --user status snapshot-agent.service",
                             service_content
                         ),
                     ])
                     .status()
                     .context("Failed to set up Linux autostart")?;
-
-                Command::new("ssh")
-                    .args([
-                        &self.ssh_config,
-                        "nohup ~/snapshot_agent > ~/.snapshot_agent/snapshot.log 2>&1 &",
-                    ])
-                    .status()
-                    .context("Failed to start Linux agent in background")?;
 
                 println!(
                     "✅ Successfully deployed and started Linux agent to {}",
@@ -153,11 +189,11 @@ impl VMConnection {
             }
 
             Some(OperatingSystem::Windows(_)) => {
-                // Copia o executável para a VM
+                // Copy the executable to the VM
                 let temp_dest = format!("{}:C:/Users/Public/snapshot_agent.exe", self.ssh_config);
                 let status = Command::new("scp")
         .args([
-            "/home/drp/my/so/boots/second_bot/target/x86_64-pc-windows-gnu/release/snapshot_agent_windows.exe",
+            "/home/drp/my/so/bots/second_bot/target/x86_64-pc-windows-gnu/release/snapshot_agent_windows.exe",
             &temp_dest,
         ])
         .status()
@@ -169,7 +205,7 @@ impl VMConnection {
                     ));
                 }
 
-                // Garante que o diretório de log existe
+                // Ensure the log directory exists
                 Command::new("ssh")
         .args([
             &self.ssh_config,
@@ -178,7 +214,7 @@ impl VMConnection {
         .status()
         .context("Failed to create log directory in Windows VM")?;
 
-                // Cria a tarefa agendada com schtasks
+                // Create the scheduled task with schtasks
                 Command::new("ssh")
         .args([
             &self.ssh_config,
@@ -187,16 +223,16 @@ impl VMConnection {
         .status()
         .context("Failed to create scheduled task for agent")?;
 
-                // Executa a tarefa
+                // Run the task
                 Command::new("ssh")
                     .args([&self.ssh_config, "schtasks /Run /TN SnapshotAgent"])
                     .status()
                     .context("Failed to run scheduled task for agent")?;
 
-                // Aguarda 2 segundos para garantir startup
+                // Wait 2 seconds to ensure startup
                 std::thread::sleep(std::time::Duration::from_secs(2));
 
-                // Verifica se o processo está ativo
+                // Check if the process is active
                 let check = Command::new("ssh")
                     .args([
                         &self.ssh_config,
@@ -206,10 +242,10 @@ impl VMConnection {
                     .context("Failed to check agent process via WMIC")?;
 
                 if String::from_utf8_lossy(&check.stdout).contains("ProcessId") {
-                    println!("🟢 Agente Windows rodando na VM {}", self.name.green());
+                    println!("🟢 Windows agent running on VM {}", self.name.green());
                 } else {
                     println!(
-                        "🟡 Agente Windows NÃO detectado como processo ativo na VM {}",
+                        "🟡 Windows agent NOT detected as active process on VM {}",
                         self.name.yellow()
                     );
                 }
@@ -221,9 +257,146 @@ impl VMConnection {
             }
 
             _ => {
-                println!("❌ Cannot deploy agent to {} - Unknown OS", self.name.red());
-                return Err(anyhow::anyhow!("Unknown OS type"));
+                println!("❌ Operating system not detected for {}", self.name.red());
+                println!(
+                    "ℹ️  Please run the {} option first to detect the operating system.",
+                    "'Test connection with VM'".green().bold()
+                );
+                return Err(anyhow::anyhow!("Operating system not detected"));
             }
+        }
+
+        Ok(())
+    }
+
+    fn get_current_hostname(&self) -> &str {
+        self.hostname.as_deref().unwrap_or(&self.ip)
+    }
+
+    fn is_connected(&self) -> bool {
+        let output = Command::new("ssh").args(["-T", &self.ssh_config]).output();
+
+        match output {
+            Ok(result) => result.status.success(),
+            Err(_) => false,
+        }
+    }
+
+    fn stop_linux_agent(&self) -> Result<()> {
+        println!(
+            "🛑 Stopping Linux agent on {}...",
+            self.get_current_hostname().cyan()
+        );
+
+        // Stop the service using systemctl
+        Command::new("ssh")
+            .args([
+                &self.ssh_config,
+                "systemctl --user stop snapshot-agent.service",
+            ])
+            .status()
+            .context("Failed to stop Linux agent service")?;
+
+        // Check if the process is still running
+        let check = Command::new("ssh")
+            .args([&self.ssh_config, "pgrep -af snapshot_agent"])
+            .output()
+            .context("Failed to check Linux agent process")?;
+
+        if check.status.success() {
+            println!(
+                "⚠️ Process still detected on {}, details:",
+                self.get_current_hostname().yellow()
+            );
+            if let Ok(output) = String::from_utf8(check.stdout) {
+                println!("{}", output);
+            }
+            println!("ℹ️ The process might take a few seconds to fully stop.");
+        } else {
+            println!(
+                "✅ Linux agent stopped successfully on {}",
+                self.get_current_hostname().green()
+            );
+        }
+
+        Ok(())
+    }
+
+    fn check_linux_agent_status(&self) -> Result<()> {
+        println!(
+            "🔍 Checking Linux agent status on {}...",
+            self.get_current_hostname().cyan()
+        );
+
+        let check = Command::new("ssh")
+            .args([&self.ssh_config, "pgrep -af snapshot_agent"])
+            .output()
+            .context("Failed to check Linux agent process")?;
+
+        if check.status.success() {
+            println!(
+                "🟢 Linux agent is running on {}",
+                self.get_current_hostname().green()
+            );
+            if let Ok(output) = String::from_utf8(check.stdout) {
+                println!("Process details:\n{}", output);
+            }
+        } else {
+            println!(
+                "🔴 Linux agent is not running on {}",
+                self.get_current_hostname().red()
+            );
+        }
+
+        Ok(())
+    }
+
+    fn restart_linux_agent(&self) -> Result<()> {
+        println!(
+            "🔄 Restarting Linux agent on {}...",
+            self.get_current_hostname().cyan()
+        );
+
+        // Stop the service
+        Command::new("ssh")
+            .args([
+                &self.ssh_config,
+                "systemctl --user stop snapshot-agent.service",
+            ])
+            .status()
+            .context("Failed to stop Linux agent service")?;
+
+        // Short pause to ensure process has stopped
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        // Start the service
+        Command::new("ssh")
+            .args([
+                &self.ssh_config,
+                "systemctl --user start snapshot-agent.service",
+            ])
+            .status()
+            .context("Failed to start Linux agent service")?;
+
+        // Check if the process is running
+        let check = Command::new("ssh")
+            .args([&self.ssh_config, "pgrep -af snapshot_agent"])
+            .output()
+            .context("Failed to check Linux agent process")?;
+
+        if check.status.success() {
+            println!(
+                "✅ Linux agent restarted successfully on {}",
+                self.get_current_hostname().green()
+            );
+            if let Ok(output) = String::from_utf8(check.stdout) {
+                println!("Process details:\n{}", output);
+            }
+        } else {
+            println!(
+                "❌ Failed to restart Linux agent on {}",
+                self.get_current_hostname().red()
+            );
         }
 
         Ok(())
@@ -234,14 +407,33 @@ impl VMConnection {
 async fn main() -> Result<()> {
     println!("{}", "🤖 VM Connection Bot Starting...".bright_blue());
     println!("{}", "==============================".bright_blue());
+    println!("\n🔄 Initializing SSH connections...");
 
-    let vms = vec![
-        VMConnection::new("computer 1", "so-lin"),
-        VMConnection::new("computer 2", "so-win"),
-        VMConnection::new("computer 3", "so-lin2"),
+    let mut vms = vec![
+        VMConnection::new("computer 1", "so-lin", "192.168.1.1"),
+        VMConnection::new("computer 2", "so-win", "192.168.1.2"),
+        VMConnection::new("computer 3", "so-lin2", "192.168.1.3"),
     ];
 
-    // Iniciar menu interativo
+    // Initialize the real hostnames of the VMs
+    for vm in &mut vms {
+        match vm.get_ssh_hostname() {
+            Ok(hostname) => {
+                println!("✅ {} -> {}", vm.name.green(), hostname.cyan());
+            }
+            Err(e) => {
+                println!(
+                    "⚠️  {} -> Using fallback ({}): {}",
+                    vm.name.yellow(),
+                    vm.ip.yellow(),
+                    e.to_string().red()
+                );
+            }
+        }
+    }
+    println!(); // Blank line for better visibility
+
+    // Start interactive menu
     cli::run_menu(vms)?;
 
     Ok(())
