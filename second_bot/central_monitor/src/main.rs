@@ -1,26 +1,47 @@
+// ------------------------------------------------------------------------------
+// CENTRAL MONITOR - MAIN MODULE
+// ------------------------------------------------------------------------------
+// Este é o módulo principal do Central Monitor, responsável por:
+// - Inicializar conexões com máquinas virtuais (VMs) via SSH
+// - Detectar automaticamente o sistema operacional remoto
+// - Gerenciar o deploy e monitoramento de agentes de snapshot
+// - Expor funcionalidades via interface de linha de comando (CLI)
+// ------------------------------------------------------------------------------
+
 use anyhow::{Context, Result};
 use colored::*;
 
 use std::process::Command;
 use std::str;
 
+// Importação do módulo CLI, que contém a interface de linha de comando
 mod cli;
 
+/// Enumeração que representa os sistemas operacionais suportados
+/// Os valores armazenam a versão detalhada do sistema operacional como String
 pub enum OperatingSystem {
-    Linux(String),   // String contains the detailed version
-    Windows(String), // String contains the detailed version
-    Unknown,
+    Linux(String),   // String contém a versão detalhada do Linux
+    Windows(String), // String contém a versão detalhada do Windows
+    Unknown,         // Sistema operacional não identificado
 }
 
+/// Estrutura que representa uma conexão com uma máquina virtual (VM)
+/// Mantém todas as informações necessárias para conexão SSH e metadados da VM
 struct VMConnection {
-    name: String,
-    ssh_config: String,
-    ip: String,               // This will be replaced with the hostname eventually
-    hostname: Option<String>, // Real hostname from SSH config
-    os: Option<OperatingSystem>,
+    name: String,            // Nome amigável da VM para exibição ao usuário
+    ssh_config: String,      // Nome da configuração SSH no arquivo ~/.ssh/config
+    ip: String,              // Endereço IP (será substituído pelo hostname eventualmente)
+    hostname: Option<String>, // Hostname real obtido da configuração SSH
+    os: Option<OperatingSystem>, // Sistema operacional detectado na VM
 }
 
 impl VMConnection {
+    /// Cria uma nova instância de VMConnection com valores iniciais
+    ///
+    /// # Argumentos
+    /// * `name` - Nome amigável para a VM
+    /// * `ssh_config` - Nome da entrada no arquivo SSH config
+    /// * `ip` - Endereço IP da VM (usado como fallback se hostname não for obtido)
     fn new(name: &str, ssh_config: &str, ip: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -31,9 +52,15 @@ impl VMConnection {
         }
     }
 
-    // Function to read HostName from the SSH config file
+    /// Lê o hostname real da configuração SSH
+    /// 
+    /// Usa o comando `ssh -G` para obter a configuração efetiva do host SSH
+    /// e extrai o hostname real da configuração.
+    /// 
+    /// # Retorna
+    /// * `Result<String>` - O hostname obtido ou o IP como fallback em caso de sucesso
     fn get_ssh_hostname(&mut self) -> Result<String> {
-        // Use ssh -G to print the effective configuration for the host
+        // Usa ssh -G para imprimir a configuração efetiva para o host
         let output = Command::new("ssh")
             .args(["-G", &self.ssh_config])
             .output()
@@ -41,7 +68,7 @@ impl VMConnection {
 
         let config = String::from_utf8_lossy(&output.stdout);
 
-        // Look for the line that starts with "hostname "
+        // Procura pela linha que começa com "hostname "
         for line in config.lines() {
             if line.starts_with("hostname ") {
                 let hostname = line
@@ -54,19 +81,26 @@ impl VMConnection {
             }
         }
 
-        // If not found, return the current IP as a fallback
+        // Se não encontrado, retorna o IP atual como fallback
         Ok(self.ip.clone())
     }
 
+    /// Testa a conexão SSH com a VM e detecta o sistema operacional
+    /// 
+    /// Este método tenta estabelecer uma conexão SSH com a VM e,
+    /// se bem-sucedido, detecta automaticamente o sistema operacional.
+    /// 
+    /// # Retorna
+    /// * `Result<bool>` - true se a conexão foi estabelecida com sucesso
     fn test_connection(&mut self) -> Result<bool> {
         println!("🔄 Testing connection to {}...", self.name.cyan());
 
-        // Get real hostname before testing
+        // Obtém o hostname real antes de testar
         if self.hostname.is_none() {
             let _ = self.get_ssh_hostname();
         }
 
-        // Use ssh -T to test the connection
+        // Usa ssh -T para testar a conexão
         let output = Command::new("ssh")
             .args(["-T", &self.ssh_config])
             .output()
@@ -74,6 +108,7 @@ impl VMConnection {
 
         let success = output.status.success();
         if success {
+            // Se a conexão teve sucesso, tenta detectar o SO
             self.detect_os()?;
             let os_description = match &self.os {
                 Some(OperatingSystem::Linux(version)) => format!("Linux ({})", version),
@@ -98,8 +133,15 @@ impl VMConnection {
         Ok(success)
     }
 
+    /// Detecta o sistema operacional da VM tentando executar comandos específicos
+    /// 
+    /// Este método tenta primeiro identificar Linux com 'uname -a',
+    /// depois tenta Windows com 'ver'. Se ambos falharem, marca como Unknown.
+    /// 
+    /// # Retorna
+    /// * `Result<()>` - Sucesso ou erro durante a detecção
     fn detect_os(&mut self) -> Result<()> {
-        // Try Linux command first
+        // Tenta primeiro o comando Linux
         let linux_check = Command::new("ssh")
             .args([&self.ssh_config, "uname -a"])
             .output()
@@ -112,7 +154,7 @@ impl VMConnection {
             }
         }
 
-        // If Linux check failed, try Windows
+        // Se a verificação do Linux falhou, tenta Windows
         let windows_check = Command::new("ssh")
             .args([&self.ssh_config, "ver"])
             .output()
@@ -125,16 +167,25 @@ impl VMConnection {
             }
         }
 
+        // Se ambas as verificações falharem, marca como desconhecido
         self.os = Some(OperatingSystem::Unknown);
         Ok(())
     }
 
+    /// Implanta o agente de snapshot na VM remota
+    /// 
+    /// Copia o binário apropriado para a VM e configura para execução automática
+    /// de forma diferente dependendo do sistema operacional (Linux ou Windows).
+    /// 
+    /// # Retorna
+    /// * `Result<()>` - Sucesso ou erro durante o deploy
     fn deploy_snapshot_agent(&self) -> Result<()> {
         println!("🚀 Deploying snapshot agent to {}...", self.name.cyan());
 
         match &self.os {
             Some(OperatingSystem::Linux(_)) => {
-                // LINUX (kept the same)
+                // LINUX: Deploy do agente para Linux usando systemd user service
+                // 1. Copia o binário Linux para a VM
                 let status = Command::new("scp")
                     .args([
                         "/home/drp/my/so/bots/second_bot/target/release/snapshot_agent_linux",
@@ -147,6 +198,7 @@ impl VMConnection {
                     return Err(anyhow::anyhow!("Failed to copy Linux agent"));
                 }
 
+                // 2. Define o conteúdo do arquivo de serviço systemd
                 let service_content = format!(
                     "[Unit]\n\
                 Description=Snapshot Agent Service\n\
@@ -163,7 +215,7 @@ impl VMConnection {
                 WantedBy=default.target"
                 );
 
-                // Configurar serviço e iniciar
+                // 3. Configura e inicia o serviço systemd do usuário
                 Command::new("ssh")
                     .args([
                         &self.ssh_config,
@@ -189,7 +241,8 @@ impl VMConnection {
             }
 
             Some(OperatingSystem::Windows(_)) => {
-                // Copy the executable to the VM
+                // WINDOWS: Deploy do agente para Windows usando Scheduled Tasks
+                // 1. Copia o executável para uma localização pública na VM
                 let temp_dest = format!("{}:C:/Users/Public/snapshot_agent.exe", self.ssh_config);
                 let status = Command::new("scp")
         .args([
@@ -205,7 +258,7 @@ impl VMConnection {
                     ));
                 }
 
-                // Ensure the log directory exists
+                // 2. Garante que o diretório de logs exista
                 Command::new("ssh")
         .args([
             &self.ssh_config,
@@ -214,7 +267,7 @@ impl VMConnection {
         .status()
         .context("Failed to create log directory in Windows VM")?;
 
-                // Create the scheduled task with schtasks
+                // 3. Cria a tarefa agendada com schtasks
                 Command::new("ssh")
         .args([
             &self.ssh_config,
@@ -223,16 +276,16 @@ impl VMConnection {
         .status()
         .context("Failed to create scheduled task for agent")?;
 
-                // Run the task
+                // 4. Executa a tarefa
                 Command::new("ssh")
                     .args([&self.ssh_config, "schtasks /Run /TN SnapshotAgent"])
                     .status()
                     .context("Failed to run scheduled task for agent")?;
 
-                // Wait 2 seconds to ensure startup
+                // Aguarda 2 segundos para garantir o startup
                 std::thread::sleep(std::time::Duration::from_secs(2));
 
-                // Check if the process is active
+                // 5. Verifica se o processo está ativo
                 let check = Command::new("ssh")
                     .args([
                         &self.ssh_config,
@@ -257,6 +310,7 @@ impl VMConnection {
             }
 
             _ => {
+                // Sistema operacional não detectado
                 println!("❌ Operating system not detected for {}", self.name.red());
                 println!(
                     "ℹ️  Please run the {} option first to detect the operating system.",
@@ -269,10 +323,18 @@ impl VMConnection {
         Ok(())
     }
 
+    /// Retorna o hostname atual da VM ou o IP como fallback
+    /// 
+    /// # Retorna
+    /// * `&str` - Uma referência ao hostname ou IP
     fn get_current_hostname(&self) -> &str {
         self.hostname.as_deref().unwrap_or(&self.ip)
     }
 
+    /// Verifica se é possível conectar à VM via SSH
+    /// 
+    /// # Retorna
+    /// * `bool` - true se a conexão foi bem-sucedida
     fn is_connected(&self) -> bool {
         let output = Command::new("ssh").args(["-T", &self.ssh_config]).output();
 
@@ -282,13 +344,17 @@ impl VMConnection {
         }
     }
 
+    /// Para o agente de snapshot em uma VM Linux
+    /// 
+    /// # Retorna
+    /// * `Result<()>` - Sucesso ou erro durante a operação
     fn stop_linux_agent(&self) -> Result<()> {
         println!(
             "🛑 Stopping Linux agent on {}...",
             self.get_current_hostname().cyan()
         );
 
-        // Stop the service using systemctl
+        // Para o serviço usando systemctl
         Command::new("ssh")
             .args([
                 &self.ssh_config,
@@ -297,7 +363,7 @@ impl VMConnection {
             .status()
             .context("Failed to stop Linux agent service")?;
 
-        // Check if the process is still running
+        // Verifica se o processo ainda está em execução
         let check = Command::new("ssh")
             .args([&self.ssh_config, "pgrep -af snapshot_agent"])
             .output()
@@ -322,6 +388,10 @@ impl VMConnection {
         Ok(())
     }
 
+    /// Verifica o status do agente Linux
+    /// 
+    /// # Retorna
+    /// * `Result<()>` - Sucesso ou erro durante a verificação
     fn check_linux_agent_status(&self) -> Result<()> {
         println!(
             "🔍 Checking Linux agent status on {}...",
@@ -351,13 +421,17 @@ impl VMConnection {
         Ok(())
     }
 
+    /// Reinicia o agente Linux parando e iniciando o serviço
+    /// 
+    /// # Retorna
+    /// * `Result<()>` - Sucesso ou erro durante o reinício
     fn restart_linux_agent(&self) -> Result<()> {
         println!(
             "🔄 Restarting Linux agent on {}...",
             self.get_current_hostname().cyan()
         );
 
-        // Stop the service
+        // Para o serviço
         Command::new("ssh")
             .args([
                 &self.ssh_config,
@@ -366,10 +440,10 @@ impl VMConnection {
             .status()
             .context("Failed to stop Linux agent service")?;
 
-        // Short pause to ensure process has stopped
+        // Pausa curta para garantir que o processo foi encerrado
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        // Start the service
+        // Inicia o serviço
         Command::new("ssh")
             .args([
                 &self.ssh_config,
@@ -378,7 +452,7 @@ impl VMConnection {
             .status()
             .context("Failed to start Linux agent service")?;
 
-        // Check if the process is running
+        // Verifica se o processo está em execução
         let check = Command::new("ssh")
             .args([&self.ssh_config, "pgrep -af snapshot_agent"])
             .output()
@@ -403,19 +477,22 @@ impl VMConnection {
     }
 }
 
+/// Função principal que inicializa as conexões e inicia o menu interativo
+/// Usa tokio para suporte assíncrono, embora a maioria das operações sejam bloqueantes
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("{}", "🤖 VM Connection Bot Starting...".bright_blue());
     println!("{}", "==============================".bright_blue());
     println!("\n🔄 Initializing SSH connections...");
 
+    // Define as VMs a serem gerenciadas
     let mut vms = vec![
         VMConnection::new("computer 1", "so-lin", "192.168.1.1"),
         VMConnection::new("computer 2", "so-win", "192.168.1.2"),
         VMConnection::new("computer 3", "so-lin2", "192.168.1.3"),
     ];
 
-    // Initialize the real hostnames of the VMs
+    // Inicializa os hostnames reais das VMs
     for vm in &mut vms {
         match vm.get_ssh_hostname() {
             Ok(hostname) => {
@@ -431,9 +508,9 @@ async fn main() -> Result<()> {
             }
         }
     }
-    println!(); // Blank line for better visibility
+    println!(); // Linha em branco para melhor visibilidade
 
-    // Start interactive menu
+    // Inicia o menu interativo
     cli::run_menu(vms)?;
 
     Ok(())
