@@ -224,3 +224,110 @@ pub fn send_fs_tree_bin_to_vm(ssh_cmd: &str) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+use std::collections::{HashMap, HashSet};
+
+/// Compara o snapshot atual do sistema de arquivos remoto com o último registro salvo.
+/// Retorna Ok(Some(relatório)) se houver diferenças, Ok(None) se não houver, ou Err em caso de erro.
+pub fn compare_with_last_snapshot(
+    ssh_cmd: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    // 1. Lê o último registro salvo
+    let path = dirs::home_dir()
+        .unwrap()
+        .join("scaner_file_sistem/mapeamento_remoto.json");
+    if !path.exists() {
+        return Ok(Some("Nenhum registro de mapeamento encontrado.\nSugestão: realize primeiro uma leitura do sistema de arquivos (mapeamento remoto).".to_string()));
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let json: serde_json::Value = serde_json::from_str(&content)?;
+    let old_fs = match json.get("fs_repr") {
+        Some(fs) => fs,
+        None => {
+            return Ok(Some(
+                "Registro salvo não possui estrutura de arquivos válida.".to_string(),
+            ));
+        }
+    };
+    let last_date = json.get("datetime").and_then(|v| v.as_str()).unwrap_or("-");
+    // 2. Faz snapshot instantâneo via SSH
+    let new_fs = super::get_remote_home_tree_json(ssh_cmd)?;
+    // 3. Compara as árvores
+    let mut report = String::new();
+    let mut changes = false;
+    compare_fs_tree_recursive(old_fs, &new_fs, "", &mut report, &mut changes);
+    if changes {
+        report = format!("Último mapeamento salvo em: {}\n{}", last_date, report);
+        Ok(Some(report))
+    } else {
+        Ok(Some(format!(
+            "Nenhuma alteração constatada no sistema de arquivos desde o último mapeamento em {}.",
+            last_date
+        )))
+    }
+}
+
+fn compare_fs_tree_recursive(
+    old: &serde_json::Value,
+    new: &serde_json::Value,
+    parent: &str,
+    report: &mut String,
+    changes: &mut bool,
+) {
+    let old_map = build_fs_map(old, parent);
+    let new_map = build_fs_map(new, parent);
+    let old_keys: HashSet<_> = old_map.keys().collect();
+    let new_keys: HashSet<_> = new_map.keys().collect();
+    // Arquivos/pastas removidos
+    for missing in old_keys.difference(&new_keys) {
+        *changes = true;
+        report.push_str(&format!("Removido: {}\n", missing));
+    }
+    // Arquivos/pastas adicionados
+    for added in new_keys.difference(&old_keys) {
+        *changes = true;
+        report.push_str(&format!("Adicionado: {}\n", added));
+    }
+    // Arquivos/pastas modificados
+    for key in old_keys.intersection(&new_keys) {
+        let old_meta = &old_map[*key];
+        let new_meta = &new_map[*key];
+        let old_mod = old_meta.modified;
+        let new_mod = new_meta.modified;
+        if old_mod != new_mod {
+            *changes = true;
+            use chrono::{Local, TimeZone};
+            let old_dt = Local.timestamp_opt(old_mod as i64, 0).unwrap();
+            let new_dt = Local.timestamp_opt(new_mod as i64, 0).unwrap();
+            report.push_str(&format!(
+                "Alterado: {} (modificado de {} para {})\n",
+                key,
+                old_dt.format("%Y-%m-%d %H:%M:%S"),
+                new_dt.format("%Y-%m-%d %H:%M:%S")
+            ));
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FsMeta {
+    modified: u64,
+}
+
+fn build_fs_map(node: &serde_json::Value, parent: &str) -> HashMap<String, FsMeta> {
+    let mut map = HashMap::new();
+    let name = node.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let path = if parent.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}/{}", parent, name)
+    };
+    let modified = node.get("modified").and_then(|v| v.as_u64()).unwrap_or(0);
+    map.insert(path.clone(), FsMeta { modified });
+    if let Some(children) = node.get("children").and_then(|v| v.as_array()) {
+        for child in children {
+            map.extend(build_fs_map(child, &path));
+        }
+    }
+    map
+}

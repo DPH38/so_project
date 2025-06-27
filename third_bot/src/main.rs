@@ -116,8 +116,7 @@ fn post_connection_menu(ssh_cmd: &str) {
             "🚀 Enviar binário fs_tree_bin para a VM",
             "🗂️ Mapear sistema de arquivos da VM (remoto)",
             "📜 Ver último registro de mapeamento",
-            "📝 Verificar alterações no sistema de arquivos (NÃO IMPLEMENTADO)",
-            "📄 Verificar alterações em arquivos .pdf da VM (NÃO IMPLEMENTADO)",
+            "📝 Verificar alterações no sistema de arquivos",
             "📑 Resumo do conteúdo de um arquivo (NÃO IMPLEMENTADO)",
             "🔙 Voltar ao menu principal",
         ];
@@ -167,10 +166,31 @@ fn post_connection_menu(ssh_cmd: &str) {
                     println!("❌ Erro ao exibir estrutura do sistema de arquivos: {}", e);
                 }
             }
-            3 | 4 | 5 => {
+            3 => {
+                // Verificar alterações no sistema de arquivos
+                match vm_map::compare_with_last_snapshot(ssh_cmd) {
+                    Ok(Some(report)) => println!("{}", report),
+                    Ok(None) => println!(
+                        "Nenhuma alteração constatada no sistema de arquivos desde o último mapeamento."
+                    ),
+                    Err(e) => {
+                        println!("❌ Erro ao comparar snapshots: {}", e);
+                        if let Some(msg) = e
+                            .to_string()
+                            .to_lowercase()
+                            .find("no such file or directory")
+                        {
+                            println!(
+                                "Sugestão: utilize a opção 'Enviar binário fs_tree_bin para a VM' para reimplantar o bot na VM."
+                            );
+                        }
+                    }
+                }
+            }
+            4 => {
                 println!("\n⚠️  Esta funcionalidade ainda não foi implementada.\n");
             }
-            6 => break, // Voltar ao menu principal
+            5 => break, // Voltar ao menu principal
             _ => unreachable!(),
         }
     }
