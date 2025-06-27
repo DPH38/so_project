@@ -1,3 +1,4 @@
+mod pdf_processor;
 mod vm_map;
 
 // Importa crates necessárias para menus interativos e execução de comandos
@@ -6,7 +7,10 @@ use std::process::Command;
 use vm_map::get_remote_home_tree_json;
 use vm_map::send_fs_tree_bin_to_vm;
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    // ...API key status display removido...
+
     // Variável para armazenar o comando SSH ativo
     let mut active_ssh_cmd: Option<String> = None;
     // Loop principal do menu
@@ -51,7 +55,7 @@ fn main() {
                             hostname, user, ip, public_ip
                         );
                         active_ssh_cmd = Some(ssh_cmd.clone());
-                        post_connection_menu(&ssh_cmd);
+                        post_connection_menu(&ssh_cmd).await;
                     }
                     Ok(out) => {
                         let err = String::from_utf8_lossy(&out.stderr);
@@ -63,7 +67,7 @@ fn main() {
             1 => {
                 // Consultar sistema de arquivos: verifica se já há conexão ativa
                 if let Some(ref ssh_cmd) = active_ssh_cmd {
-                    post_connection_menu(ssh_cmd);
+                    post_connection_menu(ssh_cmd).await;
                 } else {
                     // Não há conexão ativa, solicita conexão
                     println!("\nNenhuma conexão SSH ativa. Realize a conexão primeiro.\n");
@@ -90,7 +94,7 @@ fn main() {
                                 hostname, user, ip, public_ip
                             );
                             active_ssh_cmd = Some(ssh_cmd.clone());
-                            post_connection_menu(&ssh_cmd);
+                            post_connection_menu(&ssh_cmd).await;
                         }
                         Ok(out) => {
                             let err = String::from_utf8_lossy(&out.stderr);
@@ -110,7 +114,7 @@ fn main() {
 }
 
 // Menu de pós-conexão bem-sucedida
-fn post_connection_menu(ssh_cmd: &str) {
+async fn post_connection_menu(ssh_cmd: &str) {
     loop {
         let post_items = vec![
             "🚀 Enviar binário fs_tree_bin para a VM",
@@ -205,11 +209,8 @@ fn post_connection_menu(ssh_cmd: &str) {
                             match selection {
                                 Ok(idx) => {
                                     let pdf_path = &pdf_list[idx];
-                                    match vm_map::summarize_pdf_from_vm(ssh_cmd, pdf_path) {
-                                        Ok(content) => println!(
-                                            "\n📄 Conteúdo extraído do PDF:\n\n{}\n",
-                                            content
-                                        ),
+                                    match vm_map::summarize_pdf_from_vm(ssh_cmd, pdf_path).await {
+                                        Ok(content) => println!("{}", content),
                                         Err(e) => println!("❌ Erro ao ler PDF: {}", e),
                                     }
                                 }

@@ -339,7 +339,7 @@ fn collect_pdfs(node: &serde_json::Value, pdfs: &mut Vec<String>) {
 }
 
 /// Baixa um PDF da VM via SCP, extrai o texto e exibe ao usuário. Remove o arquivo temporário após o uso.
-pub fn summarize_pdf_from_vm(ssh_cmd: &str, remote_pdf_path: &str) -> Result<String, String> {
+pub async fn summarize_pdf_from_vm(ssh_cmd: &str, remote_pdf_path: &str) -> Result<String, String> {
     use pdf_extract::extract_text;
     use std::env;
     use std::fs;
@@ -369,6 +369,7 @@ pub fn summarize_pdf_from_vm(ssh_cmd: &str, remote_pdf_path: &str) -> Result<Str
         shell_escape::unix::escape(remote_tmp.into()),
         shell_escape::unix::escape(remote_pdf_path.into())
     );
+
     // Renomeia para /tmp/file.pdf
     let status_mv = Command::new("bash")
         .arg("-c")
@@ -394,11 +395,13 @@ pub fn summarize_pdf_from_vm(ssh_cmd: &str, remote_pdf_path: &str) -> Result<Str
         .arg(&scp_cmd)
         .status()
         .map_err(|e| format!("Erro ao executar SCP: {}", e))?;
+
     // Sempre tenta restaurar o nome original
     let _ = Command::new("bash").arg("-c").arg(&mv_back).status();
     // Remove o arquivo temporário na VM
     let rm_tmp = format!("{} 'rm -f {}'", ssh_cmd, remote_tmp);
     let _ = Command::new("bash").arg("-c").arg(&rm_tmp).status();
+
     if !status_scp.success() {
         let _ = fs::remove_file(&local_pdf);
         return Err(format!(
@@ -417,7 +420,16 @@ pub fn summarize_pdf_from_vm(ssh_cmd: &str, remote_pdf_path: &str) -> Result<Str
             if text.trim().is_empty() {
                 Err("O PDF não contém texto extraível ou está protegido/não textual.".to_string())
             } else {
-                Ok(text)
+                // Processa o conteúdo e gera o resumo
+                match super::pdf_processor::process_pdf_content_with_summary(
+                    text,
+                    remote_pdf_path.to_string(),
+                )
+                .await
+                {
+                    Ok(summary) => Ok(summary),
+                    Err(e) => Err(format!("Erro ao processar o PDF: {}", e)),
+                }
             }
         }
         Err(e) => Err(format!("Erro ao extrair texto do PDF: {}", e)),
