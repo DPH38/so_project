@@ -117,7 +117,7 @@ fn post_connection_menu(ssh_cmd: &str) {
             "🗂️ Mapear sistema de arquivos da VM (remoto)",
             "📜 Ver último registro de mapeamento",
             "📝 Verificar alterações no sistema de arquivos",
-            "📑 Resumo do conteúdo de um arquivo (NÃO IMPLEMENTADO)",
+            "📑 Resumo do conteúdo de um arquivo .pdf",
             "🔙 Voltar ao menu principal",
         ];
         let selection = Select::with_theme(&ColorfulTheme::default())
@@ -175,7 +175,7 @@ fn post_connection_menu(ssh_cmd: &str) {
                     ),
                     Err(e) => {
                         println!("❌ Erro ao comparar snapshots: {}", e);
-                        if let Some(msg) = e
+                        if let Some(_msg) = e
                             .to_string()
                             .to_lowercase()
                             .find("no such file or directory")
@@ -188,7 +188,40 @@ fn post_connection_menu(ssh_cmd: &str) {
                 }
             }
             4 => {
-                println!("\n⚠️  Esta funcionalidade ainda não foi implementada.\n");
+                // Resumo do conteúdo de um arquivo .pdf
+                match vm_map::list_pdfs_from_last_mapping() {
+                    Ok(Some(pdf_list)) => {
+                        if pdf_list.is_empty() {
+                            println!("Nenhum arquivo .pdf foi encontrado no último mapeamento.");
+                        } else {
+                            println!(
+                                "Selecione um arquivo .pdf para visualizar o conteúdo como texto:"
+                            );
+                            let selection =
+                                dialoguer::Select::with_theme(&ColorfulTheme::default())
+                                    .items(&pdf_list)
+                                    .default(0)
+                                    .interact();
+                            match selection {
+                                Ok(idx) => {
+                                    let pdf_path = &pdf_list[idx];
+                                    match vm_map::summarize_pdf_from_vm(ssh_cmd, pdf_path) {
+                                        Ok(content) => println!(
+                                            "\n📄 Conteúdo extraído do PDF:\n\n{}\n",
+                                            content
+                                        ),
+                                        Err(e) => println!("❌ Erro ao ler PDF: {}", e),
+                                    }
+                                }
+                                Err(_) => println!("Operação cancelada pelo usuário."),
+                            }
+                        }
+                    }
+                    Ok(None) => println!(
+                        "Nenhum registro de mapeamento encontrado. Realize um mapeamento antes de consultar arquivos .pdf."
+                    ),
+                    Err(e) => println!("❌ Erro ao buscar arquivos .pdf: {}", e),
+                }
             }
             5 => break, // Voltar ao menu principal
             _ => unreachable!(),
